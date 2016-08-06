@@ -1,0 +1,158 @@
+/******************************************************************************
+** Functions by Derrick Sobodash
+** http://www.cinnamonpirate.com/
+** Submitted to ROM Hacking.net on July 3, 2006
+******************************************************************************/
+
+/******************************************************************************
+** apply_ppf()
+*******************************************************************************
+** syntax: void apply_ppf(string ppf_file, string bin_file)
+*******************************************************************************
+** Applies ppf_file to bin_file if both files exist.
+******************************************************************************/
+
+function apply_ppf($ppf_file, $bin_file)
+{
+
+  // Make sure the input is all valid
+  if(!file_exists($ppf_file))
+    die("Error: apply_ppf(): Unable to open $ppf_file\r\n\r\n");
+  if(!file_exists($bin_file))
+    die("Error: apply_ppf(): Unable to open $bin_file\r\n\r\n");
+
+  // This is dirty code, it should be fixed later
+  $ppfdump = file_read($ppf_file);
+  if(strpos($ppfdump, "@BEGIN_FILE_ID"))
+    $ppf_end = strpos($ppfdump, "@BEGIN_FILE_ID");
+  else
+    $ppf_end = filesize($ppf_file);
+  unset($ppfdump);
+
+  // Open the patch file as a stream
+  $ppf = fopen($ppf_file, "rb");
+
+  if(fread($ppf, 3) != "PPF")
+    die("Error: apply_ppf(): Not a valid PPF patch\r\n\r\n");
+
+  $magic = fread($ppf, 2);
+
+  if(($magic == "10" || $magic == "20" || $magic == "30") && ord(fgetc($ppf)) == 0)
+  {
+
+    // Skip PPF internal info
+    
+    fseek($ppf, 56, SEEK_SET);
+
+    // Open the binary file in read/write mode
+    $fa = fopen($bin_file, "r+b");
+
+    while($ftell($ppf) < $ppf_end)
+    {
+
+      fseek($fa, punpack(fread($ppf, 4)), SEEK_SET);
+      $length = ord(fgetc($fa));
+      fputs($fa, fread($ppf, $length));
+
+    }
+
+    fclose($fa);
+    fclose($ppf);
+
+  }
+
+  else if(($magic == "20" || $magic == "30") && ord(fgetc($ppf)) == 1)
+  {
+
+    // Skip PPF internal info
+    
+    fseek($ppf, 56, SEEK_SET);
+
+    // Open the binary file in read/write mode
+    $fa = fopen($bin_file, "r+b");
+
+    // Run the PPF file size check
+    if(punpack(fread($ppf, 4)) != filesize($bin_file))
+      die("Error: apply_ppf(): Target file size does not match patch requirement\r\n\r\n");
+
+    // Run the PPF sector match check
+    fseek($fa, 0x9320, SEEK_SET);
+    $ppf_bin_block = fread($ppf, KBYTE);
+    $org_bin_block = fread($fa, KBYTE);
+
+    fseek($fa, 0, SEEK_SET);
+
+    if($ppf_bin_block != $org_bin_block)
+      die("Error: apply_ppf(): Target file sector \$9320 does not match patch requirement\r\n\r\n");
+
+    // Unset variables and free up some RAM
+    unset($ppf_bin_block, $org_bin_block);
+
+    while($ftell($ppf) < $ppf_end)
+    {
+
+      fseek($fa, punpack(fread($ppf, 4)), SEEK_SET);
+      $length = ord(fgetc($fa));
+      fputs($fa, fread($ppf, $length));
+
+    }
+
+    fclose($fa);
+    fclose($ppf);
+
+  }
+
+  else if($magic == "30" && ord(fgetc($ppf)) == 2)
+  {
+
+    // Skip PPF internal info
+    
+    fseek($ppf, 56, SEEK_SET);
+
+    $imagetype = ord(fgetc($ppf));
+    $blockcheck = ord(fgetc($ppf));
+    $undodata = ord(fgetc($ppf));
+    $dummy = fgetc($ppf);
+
+    // Open the binary file in read/write mode
+    $fa = fopen($bin_file, "r+b");
+
+    // Run the PPF sector match check
+    if($blockcheck != 0)
+    {
+
+      if($imagetype == 0)
+        fseek($fa, 0x9320, SEEK_SET);
+      else if($imagetype == 1)
+        fseek($fa, 0x80a0, SEEK_SET);
+      $ppf_bin_block = fread($ppf, KBYTE);
+      $org_bin_block = fread($fa, KBYTE);
+
+      fseek($fa, 0, SEEK_SET);
+
+      if($ppf_bin_block != $org_bin_block)
+        die("Error: apply_ppf(): Target file sector does not match patch requirement\r\n\r\n");
+
+      // Unset variables and free up some RAM
+      unset($ppf_bin_block, $org_bin_block);
+    }
+
+    while($ftell($ppf) < $ppf_end)
+    {
+
+      fseek($fa, punpack(fread($ppf, 8)), SEEK_SET);
+      $length = ord(fread($ppf, 2));
+      fputs($fa, fread($ppf, $length));
+
+    }
+
+    fclose($fa);
+    fclose($ppf);
+
+  }
+
+  else
+    die("Error: apply_ppf(): Unsupported PPF version\r\n\r\n");
+
+}
+

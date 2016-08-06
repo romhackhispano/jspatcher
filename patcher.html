@@ -1,0 +1,8 @@
+<input type="file" id="patchFileSelector" name="patchFileSelector" style="display:none;" />
+<a href="javascript:document.getElementById('patchFileSelector').click();">Patch</a>
+
+<script src="patcher.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+    registerPatching(document.getElementById('patchFileSelector'), 'zelda1.01.ips', 'Legend of Zelda, The (U) (PRG 1) - Español.nes', [0x3C07A00A, 0x02BB0C56]);
+</script>

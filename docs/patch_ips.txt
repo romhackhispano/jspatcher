@@ -1,0 +1,265 @@
+/******************************************************************************
+** Functions by Derrick Sobodash
+** http://www.cinnamonpirate.com/
+** Submitted to ROM Hacking.net on July 3, 2006
+******************************************************************************/
+
+/******************************************************************************
+** apply_ips()
+*******************************************************************************
+** syntax: void apply_ips(string ips_file, string bin_file)
+*******************************************************************************
+** Applies ips_file to bin_file if both files exist. Compatable with
+** IPS RLE and LunarIPS CUT command.
+******************************************************************************/
+
+function apply_ips($ips_file, $bin_file)
+{
+
+  // Make sure the input is all valid
+  if(!file_exists($ips_file))
+    die("Error: apply_ips(): Unable to open $ips_file\n\n");
+  if(!file_exists($bin_file))
+    die("Error: apply_ips(): Unable to open $bin_file\n\n");
+
+  // Open the patch file as a stream
+  $ips = fopen($ips_file, "rb");
+
+  if(fread($ips, 5) != "PATCH")
+    die("Error: apply_ips(): Supplied IPS file does not appear to be an IPS format patch\n\n");
+
+  // Open the binary file in read/write mode
+  $fa = fopen($bin_file, "r+b");
+
+  // str("EOF") signals the end of an IPS patch
+  $temp = fread($ips, 3);
+
+  while($temp != "EOF")
+  {
+
+    // Seek to the specified offset in the binary
+    fseek($fa, punpack($temp, "b"), SEEK_SET);
+    $length = punpack(fread($ips, 2), "b");
+
+    // 0x0 signals an IPS RLE byte
+
+    if($length==0)
+    {
+
+      // RLE can be up to 0xffff chars long
+      $rle_length = punpack(fread($ips, 2), "b");
+
+      // Character to repeat follows length
+      $rle_char = fgetc($ips);
+
+      // Loop the length of the RLE, writing the byte each time
+      for($rle_count = 0; $rle_count < $rle_length; $rle_count ++)
+        fputs($fa, $rle_char);
+
+    }
+
+    else
+      fputs($fa, fread($ips, $length));
+
+    // Read the next offset
+    $temp = fread($ips, 3);
+
+  }
+
+  // FuSoYa's LunarIPS program writes beyond EOF to support a "cut" command
+  // The offset after EOF is where the file is to be cut at
+  if(ftell($ips) < filesize($ips_file))
+    ftruncate($fa, punpack(fread($ips, 3), "b"));
+
+  fclose($fa);
+  fclose($ips);
+
+}
+
+
+/******************************************************************************
+** create_ips()
+*******************************************************************************
+** syntax: void create_ips(string source_file, string modified_file[,
+**         string ips_file])
+*******************************************************************************
+** Creates an IPS file by comparing the source file and modified file and
+** writes the output to ips_file. If ips_file is not specified,
+** modified_file + ".ips" will be used. Compatable with IPS RLE and the
+** LunarIPS CUT command.
+******************************************************************************/
+
+function create_ips($source_file, $modified_file, $ips_file = null)
+{
+
+  // Set a default IPS filename if none was specified
+  if($ips_file == null)
+    $ips_file = $modified_file . ".ips";
+
+  // Make sure the input is all valid
+  if(!file_exists($source_file))
+    die("Error: create_ips(): Unable to open $source_file\n\n");
+  if(!file_exists($modified_file))
+    die("Error: create_ips(): Unable to open $modified_file\n\n");
+
+  // Open the files for comparing
+  $src = fopen($source_file, "rb");
+  $mod = fopen($modified_file, "rb");
+
+  $patch = "PATCH";
+
+  if(filesize($modified_file) < filesize($source_file))
+    $end_at = filesize($modified_file);
+  else
+    $end_at = filesize($source_file);
+
+  while(ftell($mod) < $end_at - 1)
+  {
+
+    $src_char = fgetc($src);
+    $mod_char = fgetc($mod);
+    $bytes = "";
+    $rle_time = 0;
+
+    if($src_char != $mod_char)
+    {
+
+      $patch .= ppack(ftell($mod) - 1, 24, "b");
+
+      while($src_char != $mod_char && ftell($mod) != $end_at + 1)
+      {
+
+        if(strlen($bytes) > 4 && punpack(substr($bytes, -4, 4) ^ (substr($bytes, -4, 1).substr($bytes, -4, 1).substr($bytes, -4, 1).substr($bytes, -4, 1)), "b") == 0)
+        {
+
+          $rle_time = 1;
+          $bytes = substr($bytes, 0, -4);
+
+          fseek($mod, ftell($mod) - 5);
+          fseek($src, ftell($mod));
+
+          $rle_off = ftell($mod);
+          $rle_char = fgetc($mod);
+          $rle_len = 0;
+
+          while($mod_char == $rle_char && $rle_len < 0xffff)
+          {
+
+            $rle_len ++;
+            $mod_char = fgetc($mod);
+
+          }
+
+          fseek($mod, ftell($mod) - 1);
+          fseek($src, ftell($mod));
+
+          break 1; // Exit the while()
+
+        }
+
+        $bytes .= $mod_char;
+        $src_char = fgetc($src);
+        $mod_char = fgetc($mod);
+
+      }
+
+      $patch .= ppack(strlen($bytes), 16, "b") . $bytes;
+
+      if($rle_time == 1)
+      {
+
+        $patch .= ppack($rle_off, 24, "b") . ppack(0, 16, "b") . ppack($rle_len, 16, "b") . $rle_char;
+        $rle_time = 0;
+
+      }
+
+      else
+      {
+
+        fseek($src, ftell($src)-1, SEEK_SET);
+        fseek($mod, ftell($mod)-1, SEEK_SET);
+
+      }
+
+    }
+
+  }
+
+
+  if(filesize($modified_file) > $end_at)
+  {
+
+    fseek($mod, $end_at, SEEK_SET);
+
+    while(ftell($mod) < filesize($modified_file) - 1)
+    {
+
+      $mod_char = fgetc($mod);
+      $bytes = $mod_char;
+
+      $patch .= ppack(ftell($mod) - 1, 24, "b");
+
+      while(ftell($mod) < filesize($modified_file) && strlen($bytes) < 0xffff)
+      {
+
+        if(strlen($bytes) > 4 && punpack(substr($bytes, -4, 4) ^ (substr($bytes, -4, 1).substr($bytes, -4, 1).substr($bytes, -4, 1).substr($bytes, -4, 1)), "b") == 0)
+        {
+
+          $rle_time = 1;
+          $bytes = substr($bytes, 0, -4);
+          fseek($mod, ftell($mod) - 4);
+
+          $rle_off = ftell($mod);
+          $rle_char = fgetc($mod);
+          $rle_len = 0;
+
+          while($mod_char == $rle_char && $rle_len < 0xffff)
+          {
+
+            $rle_len ++;
+            $mod_char = fgetc($mod);
+
+          }
+
+          fseek($mod, ftell($mod) - 1);
+
+          break 1; // Exit the while()
+
+        }
+
+        $mod_char = fgetc($mod);
+        $bytes .= $mod_char;
+
+      }
+
+      $patch .= ppack(strlen($bytes), 16, "b") . $bytes;
+
+      if($rle_time == 1)
+      {
+
+        $patch .= ppack($rle_off, 24, "b") . ppack(0, 16, "b") . ppack($rle_len, 16, "b") . $rle_char;
+        $rle_time = 0;
+
+      }
+
+    }
+
+    $patch .= "EOF";
+
+  }
+
+  else if(filesize($modified_file) == filesize($source_file))
+    $patch .= "EOF";
+
+  else
+    $patch .= "EOF" . ppack(filesize($modified_file), 24, "b");
+
+  fclose($mod);
+  fclose($src);
+
+  $fo = fopen($ips_file, "w");
+  fputs($fo, $patch);
+  fclose($fo);
+
+}
+
